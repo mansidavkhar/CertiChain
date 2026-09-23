@@ -11,3 +11,5 @@ frontend/dist/
 results/
 *.log
 .DS_Store
+issued/
+.env.local

@@ -84,10 +84,13 @@ test/CertRegistry.test.js       24 contract tests
 lib/paper-cipher.mjs            the paper's Algorithms 1 and 4
 lib/aes-cipher.mjs              AES-256-GCM alternative
 lib/certificate.mjs             canonical JSON, certId, digest, packaging
+lib/ipfs.mjs                    Pinata pinning + multi-gateway fetch
 test-lib/crypto.test.mjs        23 crypto and packaging tests
 scripts/deploy.js               deploy + write deployments/<network>.json
 scripts/demo.mjs                full end-to-end walkthrough (the viva demo)
+scripts/issue.mjs               issue for real: encrypt, pin, anchor, make a QR
 scripts/setup-solc-offline.js   makes compiling work behind a firewall
+frontend/                       React dApp (Verify, Issue, Admin)
 ```
 
 ## Getting started
@@ -120,11 +123,45 @@ Amoy. **Never put a private key with real funds in `.env`.**
 npm run gas
 ```
 
+## Running it for real on Polygon Amoy
+
+```bash
+# 1. configure
+cp .env.example .env            # PRIVATE_KEY, PINATA_JWT
+cp frontend/.env.example frontend/.env.local   # VITE_PINATA_JWT
+
+# 2. deploy — writes frontend/src/contract.json automatically
+npm run deploy:amoy
+
+# 3. issue one from the command line (prints a QR code in the terminal)
+npx hardhat run scripts/issue.mjs --network amoy
+
+# 4. or run the dApp
+cd frontend && npm install && npm run dev
+```
+
+The dApp has three pages:
+
+- **Verify** — needs no wallet at all. Scanning the QR code opens it with
+  everything prefilled and the check runs on load. Integrity is confirmed
+  before, and independently of, decryption.
+- **Issue** — connects MetaMask, encrypts in the browser, pins to IPFS,
+  anchors on chain, and produces the student's QR code.
+- **Admin** — manage issuer addresses (owner only) and revoke (issuer only).
+
+### About the Pinata key in the frontend
+
+Anything named `VITE_*` is compiled into the JavaScript the browser downloads,
+so `VITE_PINATA_JWT` is **not secret** once the app is deployed. That is
+acceptable for a mini project. In a production system the upload would go
+through a small backend holding the key server-side. Use a Pinata key scoped
+to `pinJSONToIPFS` only, and revoke it when the project is marked.
+
 ## Status
 
 - [x] Week 1 — contract, tests, deploy script
 - [x] Week 2a — both ciphers, packaging layer, tests, end-to-end demo
-- [ ] Week 2b — real IPFS (Pinata), React dApp, QR codes
+- [x] Week 2b — real IPFS (Pinata), React dApp, QR codes
 - [ ] Week 3 — evaluation (gas, latency, throughput, cipher comparison), report
 
 ## Licence
