@@ -184,6 +184,60 @@ if (!PINATA_JWT) {
   }
 }
 
+/* ---------- 4b. IPFS gateways --------------------------------------- */
+
+console.log("\nIPFS gateways");
+
+{
+  const { GATEWAYS } = await import("../lib/ipfs.mjs");
+  const gateway = process.env.PINATA_GATEWAY;
+
+  report(
+    gateway ? PASS : WARN,
+    "dedicated gateway",
+    gateway || "not set — falling back to shared public gateways, which are rate-limited"
+  );
+  if (!gateway) {
+    notes.push(
+      "Set a dedicated Pinata gateway. Public gateways are shared across the\n" +
+        "   whole internet and time out under load, which is the usual cause of\n" +
+        '   "Could not fetch … from any gateway" in the dApp. Find yours in the\n' +
+        "   Pinata dashboard under Gateways, then add to BOTH files:\n" +
+        "     .env                 PINATA_GATEWAY=https://your-name.mypinata.cloud\n" +
+        "     frontend/.env.local  VITE_PINATA_GATEWAY=https://your-name.mypinata.cloud"
+    );
+  }
+
+  // A CID that has existed since the early days of IPFS: the docs "hello world".
+  const KNOWN = "bafkreicysg23kiwv34eg2d7qweipxwosdo2py4ldv42nbauguluen5v6am";
+  let reachable = 0;
+
+  for (const g of GATEWAYS) {
+    try {
+      const t0 = Date.now();
+      const res = await fetch(`${g}${KNOWN}`, { signal: AbortSignal.timeout(12000) });
+      if (res.ok) {
+        reachable++;
+        report(PASS, `  ${g}`, `${Date.now() - t0} ms`);
+      } else {
+        report(WARN, `  ${g}`, `HTTP ${res.status}`);
+      }
+    } catch (e) {
+      report(WARN, `  ${g}`, e.name === "TimeoutError" ? "timed out" : e.message);
+    }
+  }
+
+  if (reachable === 0) {
+    report(FAIL, "gateway reachability", "none responded");
+    notes.push(
+      "No IPFS gateway responded. Either your network blocks them, or they are\n" +
+        "   all rate-limiting you right now. A dedicated Pinata gateway avoids both."
+    );
+  } else {
+    report(PASS, "gateway reachability", `${reachable} of ${GATEWAYS.length} responding`);
+  }
+}
+
 /* ---------- 5. deployment ------------------------------------------ */
 
 console.log("\nDeployment");

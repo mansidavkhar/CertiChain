@@ -67,7 +67,19 @@ const FAKE_CID = "bafkreievb2nwrex2lhhaoosmezv3j3dc7y2t7b24hx57ynwbjblqzxa66a";
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
 
-  const [issuer, other] = await ethers.getSigners();
+  const [issuer] = await ethers.getSigners();
+
+  /**
+   * A throwaway address to add and remove as an issuer.
+   *
+   * On a local chain Hardhat hands you twenty funded signers, but on a real
+   * network there is exactly one — the single PRIVATE_KEY from .env — so
+   * asking for a second signer gives undefined. addIssuer only writes an
+   * address into a mapping and never needs that account to sign anything,
+   * so a freshly generated address measures the same gas.
+   */
+  const scratch = ethers.Wallet.createRandom().address;
+
   const feeData = await ethers.provider.getFeeData();
   const gasPrice = feeData.gasPrice ?? ethers.parseUnits("30", "gwei");
   const symbol = network.name === "amoy" ? "POL" : "ETH";
@@ -96,13 +108,13 @@ async function main() {
   const r1 = await (await registry.issueCertificate(c1.certId, FAKE_CID, c1.dataHash)).wait();
   ops.push({ operation: "issueCertificate", gasUsed: r1.gasUsed });
 
-  const rAdd = await (await registry.addIssuer(other.address)).wait();
+  const rAdd = await (await registry.addIssuer(scratch)).wait();
   ops.push({ operation: "addIssuer", gasUsed: rAdd.gasUsed });
 
   const rRev = await (await registry.revokeCertificate(c1.certId, "benchmark")).wait();
   ops.push({ operation: "revokeCertificate", gasUsed: rRev.gasUsed });
 
-  const rRem = await (await registry.removeIssuer(other.address)).wait();
+  const rRem = await (await registry.removeIssuer(scratch)).wait();
   ops.push({ operation: "removeIssuer", gasUsed: rRem.gasUsed });
 
   // The view functions. estimateGas reports what they *would* cost inside a
