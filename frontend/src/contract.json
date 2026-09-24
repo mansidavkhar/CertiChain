@@ -1,10 +1,10 @@
 {
-  "network": "localhost",
-  "chainId": 31337,
-  "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-  "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-  "deploymentBlock": 1,
-  "deployedAt": "2026-09-23T17:11:23.573Z",
+  "network": "amoy",
+  "chainId": 80002,
+  "address": "0x0BaEe698C3B689C74A51d9cED088B4D3C4175285",
+  "deployer": "0x436C51E12434aa3F763af267C37911Ae101fb25B",
+  "deploymentBlock": 48429538,
+  "deployedAt": "2026-09-24T12:09:48.732Z",
   "abi": [
     {
       "inputs": [],

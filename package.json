@@ -14,7 +14,12 @@
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
     "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
     "deploy:amoy": "hardhat run scripts/deploy.js --network amoy",
-    "doctor": "node scripts/doctor.mjs"
+    "doctor": "node scripts/doctor.mjs",
+    "bench:cipher": "node scripts/bench-cipher.mjs",
+    "bench:chain": "hardhat run scripts/bench-chain.mjs",
+    "bench:chain:amoy": "hardhat run scripts/bench-chain.mjs --network amoy",
+    "charts": "node scripts/make-charts.mjs",
+    "evaluate": "npm run bench:cipher && npm run bench:chain && npm run charts"
   },
   "license": "MIT",
   "devDependencies": {

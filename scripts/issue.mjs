@@ -13,6 +13,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import hre from "hardhat";
 import QRCode from "qrcode";
@@ -24,8 +25,29 @@ const { ethers, network } = hre;
 
 const CERT_FILE = process.env.CERT_FILE || "samples/certificate.sample.json";
 const SCHEME = process.env.SCHEME || SCHEMES.AES;
-// Where the deployed dApp lives, used to build the QR link.
-const APP_URL = process.env.APP_URL || "http://localhost:5173";
+
+/**
+ * Find this machine's address on the local network.
+ *
+ * The QR code is meant to be scanned with a phone, and "localhost" in a QR
+ * code means the *phone*, which is running nothing — you get
+ * ERR_CONNECTION_REFUSED. The link has to carry an address the phone can
+ * actually reach, so default to the LAN IP rather than localhost.
+ *
+ * Remember to start Vite with `npm run dev -- --host`, or it listens only on
+ * localhost and the phone still cannot connect.
+ */
+function lanAddress() {
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const iface of ifaces ?? []) {
+      if (iface.family === "IPv4" && !iface.internal) return iface.address;
+    }
+  }
+  return null;
+}
+
+const lan = lanAddress();
+const APP_URL = process.env.APP_URL || `http://${lan ?? "localhost"}:5173`;
 
 function loadDeployment() {
   const file = path.join("deployments", `${network.name}.json`);
@@ -156,7 +178,17 @@ async function main() {
   console.log(`\nGive the student the QR code. It carries the decryption key,`);
   console.log(`so treat it as confidential — anyone holding it can read the`);
   console.log(`certificate (though not forge one).`);
+
   console.log(`\nVerification link:\n${link}`);
+  if (lan && !process.env.APP_URL) {
+    console.log(
+      `\nThe link points at ${lan}, this machine's address on your network,` +
+        `\nso a phone on the same Wi-Fi can open it. For that to work the dev` +
+        `\nserver must be listening on all interfaces:` +
+        `\n    cd frontend && npm run dev -- --host` +
+        `\nOn this machine, http://localhost:5173 works too.`
+    );
+  }
 
   // Also draw it in the terminal, handy when demonstrating live.
   console.log(`\n${await QRCode.toString(link, { type: "terminal", small: true })}`);

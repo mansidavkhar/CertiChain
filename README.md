@@ -90,6 +90,10 @@ scripts/deploy.js               deploy + write deployments/<network>.json
 scripts/demo.mjs                full end-to-end walkthrough (the viva demo)
 scripts/issue.mjs               issue for real: encrypt, pin, anchor, make a QR
 scripts/setup-solc-offline.js   makes compiling work behind a firewall
+scripts/doctor.mjs              one-shot config check (env, RPC, Pinata, deploy)
+scripts/bench-cipher.mjs        cipher comparison: speed, size, brute-force
+scripts/bench-chain.mjs         gas, cost, latency, throughput
+scripts/make-charts.mjs         CSVs -> SVG charts + results/report.html
 frontend/                       React dApp (Verify, Issue, Admin)
 ```
 
@@ -157,12 +161,33 @@ acceptable for a mini project. In a production system the upload would go
 through a small backend holding the key server-side. Use a Pinata key scoped
 to `pinJSONToIPFS` only, and revoke it when the project is marked.
 
+## Evaluation
+
+```bash
+npm run bench:cipher          # paper's cipher vs AES-256-GCM
+npm run bench:chain           # gas + latency, local chain
+npm run bench:chain:amoy      # same, on the real testnet (costs test POL)
+npm run charts                # -> results/charts/*.svg + results/report.html
+```
+
+`npm run evaluate` runs the lot. Open `results/report.html` for everything on
+one page; the individual SVGs in `results/charts/` paste into Word and stay
+sharp at any size.
+
+One caveat to carry into the write-up: on a local Hardhat node every
+transaction mines instantly, so local latency and throughput measure the node
+software, not blockchain consensus. The paper has the same problem — it reports
+sub-millisecond latencies, which no real network achieves. Use the Amoy run for
+the latency and throughput figures; gas figures are identical either way,
+because gas depends on the bytecode rather than the network.
+
 ## Status
 
 - [x] Week 1 — contract, tests, deploy script
 - [x] Week 2a — both ciphers, packaging layer, tests, end-to-end demo
 - [x] Week 2b — real IPFS (Pinata), React dApp, QR codes
-- [ ] Week 3 — evaluation (gas, latency, throughput, cipher comparison), report
+- [x] Week 3a — benchmarks and charts
+- [ ] Week 3b — run benchmarks on Amoy, write the report
 
 ## Licence
 
