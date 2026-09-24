@@ -34,6 +34,43 @@ const isLocal = network.name === "hardhat" || network.name === "localhost";
 // waits for a real block.
 const BATCHES = isLocal ? [10, 20, 30, 40, 50] : [3, 6, 9];
 
+/**
+ * Public RPC endpoints drop requests under load, and a run that dies halfway
+ * wastes real testnet tokens. These are the failures worth retrying:
+ *
+ *   "Invalid JSON-RPC response"  the endpoint returned an empty or truncated
+ *                                body, usually while rate-limiting
+ *   "Unknown block"              the transaction was sent, then a different
+ *                                server behind the same load balancer handled
+ *                                the receipt request and had not synced that
+ *                                block yet
+ *   429 / 503 / timeouts         ordinary overload
+ *
+ * None of these mean the transaction failed, so waiting and asking again is
+ * the correct response rather than aborting.
+ */
+const TRANSIENT =
+  /Invalid JSON-RPC response|Unknown block|could not coalesce|timeout|ETIMEDOUT|ECONNRESET|socket hang up|429|503|502|rate limit/i;
+
+async function withRetry(label, fn, attempts = 5) {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = e.message ?? String(e);
+      if (i >= attempts || !TRANSIENT.test(msg)) throw e;
+      const wait = 1500 * i;
+      console.log(
+        `   ${label}: RPC hiccup (${msg.slice(0, 48).trim()}…) — retry ${i}/${attempts - 1} in ${wait} ms`
+      );
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
+/** Wait for a receipt, tolerating an endpoint that has not caught up yet. */
+const waitFor = (tx, label = "receipt") => withRetry(label, () => tx.wait());
+
 const csv = (file, rows) => {
   if (!rows.length) return;
   const headers = Object.keys(rows[0]);
@@ -100,27 +137,37 @@ async function main() {
 
   const registry = await ethers.deployContract("CertRegistry");
   await registry.waitForDeployment();
-  const deployGas = (await registry.deploymentTransaction().wait()).gasUsed;
+  const deployGas = (await waitFor(registry.deploymentTransaction(), "deploy")).gasUsed;
 
   const ops = [{ operation: "deploy (once)", gasUsed: deployGas }];
 
   const c1 = await makeCert(1);
-  const r1 = await (await registry.issueCertificate(c1.certId, FAKE_CID, c1.dataHash)).wait();
+  const r1 = await withRetry("issue", async () =>
+    waitFor(await registry.issueCertificate(c1.certId, FAKE_CID, c1.dataHash))
+  );
   ops.push({ operation: "issueCertificate", gasUsed: r1.gasUsed });
 
-  const rAdd = await (await registry.addIssuer(scratch)).wait();
+  const rAdd = await withRetry("addIssuer", async () =>
+    waitFor(await registry.addIssuer(scratch))
+  );
   ops.push({ operation: "addIssuer", gasUsed: rAdd.gasUsed });
 
-  const rRev = await (await registry.revokeCertificate(c1.certId, "benchmark")).wait();
+  const rRev = await withRetry("revoke", async () =>
+    waitFor(await registry.revokeCertificate(c1.certId, "benchmark"))
+  );
   ops.push({ operation: "revokeCertificate", gasUsed: rRev.gasUsed });
 
-  const rRem = await (await registry.removeIssuer(scratch)).wait();
+  const rRem = await withRetry("removeIssuer", async () =>
+    waitFor(await registry.removeIssuer(scratch))
+  );
   ops.push({ operation: "removeIssuer", gasUsed: rRem.gasUsed });
 
   // The view functions. estimateGas reports what they *would* cost inside a
   // transaction; called externally, as an employer does, they cost nothing.
   const c2 = await makeCert(2);
-  await (await registry.issueCertificate(c2.certId, FAKE_CID, c2.dataHash)).wait();
+  await withRetry("issue2", async () =>
+    waitFor(await registry.issueCertificate(c2.certId, FAKE_CID, c2.dataHash))
+  );
   for (const [label, est] of [
     ["verifyCertificate (view)", await registry.verifyCertificate.estimateGas(c2.certId, c2.dataHash)],
     ["getCertificate (view)", await registry.getCertificate.estimateGas(c2.certId)],
@@ -196,22 +243,36 @@ async function main() {
     const encryptMs = performance.now() - encStart;
 
     const latencies = [];
+    let failed = 0;
     const batchStart = performance.now();
 
     for (const c of certs) {
       const t0 = performance.now();
-      const tx = await registry.issueCertificate(c.certId, FAKE_CID, c.dataHash);
-      await tx.wait();
-      latencies.push(performance.now() - t0);
+      try {
+        const tx = await registry.issueCertificate(c.certId, FAKE_CID, c.dataHash);
+        await waitFor(tx, "latency sample");
+        latencies.push(performance.now() - t0);
+      } catch (e) {
+        // One bad sample should not throw away the whole batch. Record it and
+        // report how many succeeded, so the numbers stay honest.
+        failed++;
+        console.log(`   sample dropped: ${(e.message ?? e).toString().slice(0, 70)}`);
+      }
+    }
+
+    if (latencies.length === 0) {
+      console.log(`   all ${size} transactions failed — skipping this batch`);
+      continue;
     }
 
     const wall = (performance.now() - batchStart) / 1000;
     const row = {
-      transactions: size,
+      transactions: latencies.length,
       minLatencyMs: +Math.min(...latencies).toFixed(2),
-      avgLatencyMs: +(latencies.reduce((a, b) => a + b, 0) / size).toFixed(2),
+      avgLatencyMs: +(latencies.reduce((a, b) => a + b, 0) / latencies.length).toFixed(2),
       maxLatencyMs: +Math.max(...latencies).toFixed(2),
-      throughputTps: +(size / wall).toFixed(2),
+      throughputTps: +(latencies.length / wall).toFixed(2),
+      failedTransactions: failed,
       encryptionMsTotal: +encryptMs.toFixed(2),
       network: network.name,
     };

@@ -1,6 +1,11 @@
 import { useState } from "react";
 import QRCode from "qrcode";
-import { getSignerContract, txUrl, readableError } from "../lib/chain";
+import {
+  getSignerContract,
+  getReadOnlyContract,
+  txUrl,
+  readableError,
+} from "../lib/chain";
 import { packageCertificate, SCHEMES } from "@lib/certificate.mjs";
 import { pinJSON, gatewayUrl } from "@lib/ipfs.mjs";
 
@@ -51,7 +56,19 @@ export default function Issue() {
       setStage("Connecting wallet…");
       const { contract, address } = await getSignerContract();
 
-      if (!(await contract.isIssuer(address))) {
+      /*
+       * Reads go through our own provider, not MetaMask's.
+       *
+       * MetaMask talks to whatever RPC it has configured for this network,
+       * which we cannot see or choose. When that endpoint is overloaded it
+       * returns malformed responses and ethers reports the unhelpful
+       * "could not coalesce error". Routing the read-only checks through the
+       * racing provider in chain.js keeps MetaMask's flaky endpoint out of
+       * everything except the one step that genuinely needs a signature.
+       */
+      const reader = await getReadOnlyContract();
+
+      if (!(await reader.isIssuer(address))) {
         throw new Error(
           `${address} is not whitelisted as an issuer. Add it from the Admin ` +
             `page using the contract owner's wallet.`
@@ -62,7 +79,7 @@ export default function Issue() {
       const pkg = await packageCertificate(fields, scheme);
 
       // Catch the clash before spending gas on a transaction that will revert.
-      const [existing] = await contract.verifyCertificate(pkg.certId, pkg.dataHash);
+      const [existing] = await reader.verifyCertificate(pkg.certId, pkg.dataHash);
       if (existing !== 0n) {
         throw new Error(
           "A certificate already exists for this student id, course and date."

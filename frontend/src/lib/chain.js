@@ -226,6 +226,21 @@ export function readableError(e) {
     };
     return explanations[custom] ?? `Rejected by the contract: ${custom}`;
   }
+  /*
+   * "could not coalesce error" is ethers failing to parse what the provider
+   * returned. In practice it means MetaMask's own RPC endpoint for this
+   * network is overloaded and returning malformed responses. The dApp cannot
+   * choose that endpoint, so the user has to change it in MetaMask.
+   */
+  if (/could not coalesce|Invalid JSON-RPC|Unknown block/i.test(e.message ?? "")) {
+    return (
+      `MetaMask's RPC endpoint for ${chainInfo.name} is not responding properly. ` +
+      `This is a network problem, not a problem with your certificate. ` +
+      `In MetaMask open Settings → Networks → ${chainInfo.name} and change the ` +
+      `RPC URL to https://polygon-amoy-bor-rpc.publicnode.com, then try again.`
+    );
+  }
+
   if (e.message?.includes("insufficient funds")) {
     return `Not enough ${chainInfo.currency?.symbol ?? "gas token"} to pay for the transaction.`;
   }
