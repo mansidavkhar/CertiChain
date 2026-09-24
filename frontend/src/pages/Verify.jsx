@@ -110,8 +110,20 @@ export default function Verify() {
 
       // 3. Ask the chain. A free `view` call through a public RPC.
       setStage("Reading the registry…");
-      const registry = getReadOnlyContract();
-      const [statusCode, cert] = await registry.verifyCertificate(id.trim(), digest);
+      const registry = await getReadOnlyContract();
+
+      let statusCode, cert;
+      try {
+        [statusCode, cert] = await registry.verifyCertificate(id.trim(), digest);
+      } catch (e) {
+        // A bare "Failed to fetch" here is a dead RPC, not a bad certificate.
+        // Say which step broke, so it is never mistaken for a verdict.
+        throw new Error(
+          `Reached the network but the registry call failed: ` +
+            `${e.shortMessage ?? e.message}. This is an RPC problem, not a ` +
+            `problem with the certificate.`
+        );
+      }
 
       setResult({
         status: STATUS[Number(statusCode)],

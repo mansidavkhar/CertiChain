@@ -34,9 +34,9 @@ export default function Admin() {
 
   useEffect(() => {
     getReadOnlyContract()
-      .totalIssued()
+      .then((c) => c.totalIssued())
       .then((n) => setTotal(Number(n)))
-      .catch(() => {});
+      .catch(() => {}); // the banner on the next action will explain
   }, []);
 
   async function connect() {
@@ -44,7 +44,7 @@ export default function Admin() {
     try {
       const { address } = await connectWallet();
       setWallet(address);
-      const registry = getReadOnlyContract();
+      const registry = await getReadOnlyContract();
       const [owner, issuer] = await Promise.all([
         registry.owner(),
         registry.isIssuer(address),
@@ -69,7 +69,10 @@ export default function Admin() {
       setBanner({ kind: "warn", text: `${label} — waiting to be mined…` });
       await tx.wait();
       setBanner({ kind: "ok", text: `${label} confirmed.`, hash: tx.hash });
-      getReadOnlyContract().totalIssued().then((n) => setTotal(Number(n)));
+      getReadOnlyContract()
+        .then((c) => c.totalIssued())
+        .then((n) => setTotal(Number(n)))
+        .catch(() => {});
     } catch (e) {
       setBanner({ kind: "error", text: readableError(e) });
     } finally {

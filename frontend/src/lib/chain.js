@@ -15,22 +15,45 @@
 import { BrowserProvider, JsonRpcProvider, Contract } from "ethers";
 import deployment from "../contract.json";
 
+/**
+ * Each chain carries several RPC endpoints rather than one.
+ *
+ * Public RPC endpoints are shared infrastructure: they rate-limit, go down,
+ * and are sometimes unreachable from a particular network or ISP entirely
+ * (DNS for rpc-amoy.polygon.technology fails on some Indian connections, for
+ * instance). One hardcoded endpoint therefore means the dApp simply does not
+ * work for some users, with no recourse.
+ *
+ * To force a specific endpoint — your own Alchemy or Infura URL, say — set
+ * VITE_RPC_URL in frontend/.env.local and it takes priority over everything
+ * below. Restart the dev server afterwards; Vite reads env files at startup,
+ * so a browser refresh alone will not pick up the change.
+ */
 export const CHAINS = {
   80002: {
     name: "Polygon Amoy",
-    rpc: "https://rpc-amoy.polygon.technology",
+    rpcs: [
+      "https://polygon-amoy-bor-rpc.publicnode.com",
+      "https://rpc-amoy.polygon.technology",
+      "https://rpc.ankr.com/polygon_amoy",
+      "https://polygon-amoy.drpc.org",
+    ],
     explorer: "https://amoy.polygonscan.com",
     currency: { name: "POL", symbol: "POL", decimals: 18 },
   },
   11155111: {
     name: "Sepolia",
-    rpc: "https://ethereum-sepolia-rpc.publicnode.com",
+    rpcs: [
+      "https://ethereum-sepolia-rpc.publicnode.com",
+      "https://rpc.sepolia.org",
+      "https://sepolia.drpc.org",
+    ],
     explorer: "https://sepolia.etherscan.io",
     currency: { name: "Sepolia Ether", symbol: "ETH", decimals: 18 },
   },
   31337: {
     name: "Hardhat (local)",
-    rpc: "http://127.0.0.1:8545",
+    rpcs: ["http://127.0.0.1:8545"],
     explorer: null,
     currency: { name: "Ether", symbol: "ETH", decimals: 18 },
   },
@@ -52,15 +75,66 @@ export function addressUrl(addr) {
   return chainInfo.explorer ? `${chainInfo.explorer}/address/${addr}` : null;
 }
 
-/** Read-only contract. Needs no wallet at all. */
-export function getReadOnlyContract() {
-  if (!chainInfo.rpc) {
-    throw new Error(`No RPC endpoint configured for chain ${TARGET_CHAIN_ID}`);
+/** Endpoints to try, with any explicit override first. */
+const RPC_ENDPOINTS = [
+  import.meta.env.VITE_RPC_URL,
+  ...(chainInfo.rpcs ?? []),
+].filter(Boolean);
+
+let cachedContract = null;
+
+/**
+ * Read-only contract. Needs no wallet at all.
+ *
+ * Races every endpoint and keeps the first that answers with the right chain
+ * id, then caches it for the rest of the session. Racing rather than trying
+ * each in turn matters: a dead endpoint usually hangs until it times out
+ * rather than failing fast, so sequential attempts would leave the user
+ * staring at a spinner for however long the slowest one takes.
+ *
+ * Checking the chain id is not paranoia — an endpoint that quietly serves a
+ * different network would report every certificate as "not found", which
+ * looks exactly like a forged certificate. Better to reject the endpoint.
+ */
+export async function getReadOnlyContract() {
+  if (cachedContract) return cachedContract;
+
+  if (RPC_ENDPOINTS.length === 0) {
+    throw new Error(`No RPC endpoint configured for chain ${TARGET_CHAIN_ID}.`);
   }
-  const provider = new JsonRpcProvider(chainInfo.rpc, TARGET_CHAIN_ID, {
-    staticNetwork: true, // skip the extra chainId round-trip on every call
+
+  const failures = [];
+  const attempts = RPC_ENDPOINTS.map(async (url) => {
+    const provider = new JsonRpcProvider(url, TARGET_CHAIN_ID, {
+      staticNetwork: true, // no chainId round-trip on every later call
+    });
+    try {
+      const id = Number((await provider.getNetwork()).chainId);
+      if (id !== TARGET_CHAIN_ID) {
+        throw new Error(`serves chain ${id}, expected ${TARGET_CHAIN_ID}`);
+      }
+      return provider;
+    } catch (e) {
+      failures.push(`${url} — ${e.shortMessage ?? e.message}`);
+      throw e;
+    }
   });
-  return new Contract(CONTRACT_ADDRESS, deployment.abi, provider);
+
+  let provider;
+  try {
+    provider = await Promise.any(attempts);
+  } catch {
+    throw new Error(
+      `Could not reach ${chainInfo.name}. Tried:\n${failures.join("\n")}\n\n` +
+        `Public RPC endpoints are shared and sometimes blocked by an ISP. ` +
+        `Set VITE_RPC_URL in frontend/.env.local to an endpoint that works ` +
+        `for you (the same one as AMOY_RPC_URL in .env is a good start), then ` +
+        `restart the dev server.`
+    );
+  }
+
+  cachedContract = new Contract(CONTRACT_ADDRESS, deployment.abi, provider);
+  return cachedContract;
 }
 
 export function hasWallet() {
