@@ -38,6 +38,7 @@ export const CHAINS = {
       "https://rpc.ankr.com/polygon_amoy",
       "https://polygon-amoy.drpc.org",
     ],
+    rpc: "https://polygon-amoy-bor-rpc.publicnode.com",
     explorer: "https://amoy.polygonscan.com",
     currency: { name: "POL", symbol: "POL", decimals: 18 },
   },
@@ -60,7 +61,10 @@ export const CHAINS = {
 };
 
 export const TARGET_CHAIN_ID = deployment.chainId;
-export const CONTRACT_ADDRESS = deployment.address;
+export const CONTRACT_ADDRESS = deployment.address ?? deployment.addresses?.CertRegistry;
+export const CONTRACTS = deployment.contracts ?? {
+  CertRegistry: { address: deployment.address, abi: deployment.abi },
+};
 export const chainInfo = CHAINS[TARGET_CHAIN_ID] ?? {
   name: `chain ${TARGET_CHAIN_ID}`,
   rpc: null,
@@ -81,7 +85,7 @@ const RPC_ENDPOINTS = [
   ...(chainInfo.rpcs ?? []),
 ].filter(Boolean);
 
-let cachedContract = null;
+let cachedContracts = null;
 
 /**
  * Read-only contract. Needs no wallet at all.
@@ -97,7 +101,7 @@ let cachedContract = null;
  * looks exactly like a forged certificate. Better to reject the endpoint.
  */
 export async function getReadOnlyContract() {
-  if (cachedContract) return cachedContract;
+  if (cachedContracts) return cachedContracts.CertRegistry;
 
   if (RPC_ENDPOINTS.length === 0) {
     throw new Error(`No RPC endpoint configured for chain ${TARGET_CHAIN_ID}.`);
@@ -133,8 +137,18 @@ export async function getReadOnlyContract() {
     );
   }
 
-  cachedContract = new Contract(CONTRACT_ADDRESS, deployment.abi, provider);
-  return cachedContract;
+  cachedContracts = Object.fromEntries(
+    Object.entries(CONTRACTS).map(([name, value]) => [
+      name,
+      new Contract(value.address, value.abi, provider),
+    ])
+  );
+  return cachedContracts.CertRegistry;
+}
+
+export async function getReadOnlyContracts() {
+  await getReadOnlyContract();
+  return cachedContracts;
 }
 
 export function hasWallet() {
@@ -198,8 +212,21 @@ async function switchChain() {
 export async function getSignerContract() {
   const { signer, address } = await connectWallet();
   return {
-    contract: new Contract(CONTRACT_ADDRESS, deployment.abi, signer),
+    contract: new Contract(CONTRACTS.CertRegistry.address, CONTRACTS.CertRegistry.abi, signer),
     address,
+  };
+}
+
+export async function getSignerContracts() {
+  const { signer, address } = await connectWallet();
+  return {
+    address,
+    contracts: Object.fromEntries(
+      Object.entries(CONTRACTS).map(([name, value]) => [
+        name,
+        new Contract(value.address, value.abi, signer),
+      ])
+    ),
   };
 }
 
@@ -223,6 +250,8 @@ export function readableError(e) {
       ZeroHash: "The certificate digest is empty.",
       ZeroCertId: "The certificate id is empty.",
       ZeroAddress: "That address is empty.",
+      NotCertificateOwner: "Only the SBT owner can manage access.",
+      Soulbound: "Certificate tokens cannot be transferred.",
     };
     return explanations[custom] ?? `Rejected by the contract: ${custom}`;
   }

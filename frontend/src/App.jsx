@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import Verify from "./pages/Verify";
 import Issue from "./pages/Issue";
 import Admin from "./pages/Admin";
-import { CONTRACT_ADDRESS, chainInfo, addressUrl } from "./lib/chain";
+import MyCertificates from "./pages/MyCertificates";
+import { CONTRACT_ADDRESS, chainInfo, addressUrl, TARGET_CHAIN_ID, hasWallet } from "./lib/chain";
 
 /**
  * Hash-based routing, hand-rolled.
@@ -17,6 +18,7 @@ const ROUTES = {
   "/verify": { label: "Verify", component: Verify },
   "/issue": { label: "Issue", component: Issue },
   "/admin": { label: "Admin", component: Admin },
+  "/mine": { label: "My certificates", component: MyCertificates },
 };
 
 function currentPath() {
@@ -77,6 +79,12 @@ export default function App() {
           — that writes the address and ABI into{" "}
           <span className="mono">frontend/src/contract.json</span>. Restart the
           dev server afterwards.
+        </div>
+      )}
+      {hasWallet() && window.ethereum?.chainId &&
+        Number(window.ethereum.chainId) !== TARGET_CHAIN_ID && (
+        <div className="banner error">
+          MetaMask is not on Polygon Amoy. Connect or switch networks before writing.
         </div>
       )}
 

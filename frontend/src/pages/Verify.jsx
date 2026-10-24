@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   getReadOnlyContract,
+  getReadOnlyContracts,
+  getSignerContracts,
   CONTRACT_ADDRESS,
   chainInfo,
   addressUrl,
@@ -64,6 +66,7 @@ export default function Verify() {
   const [result, setResult] = useState(null);
   const [revealed, setRevealed] = useState(null);
   const [revealError, setRevealError] = useState("");
+  const [logged, setLogged] = useState(false);
 
   /* Pull parameters out of the QR link, e.g. #/verify?id=0x..&cid=..&key=.. */
   useEffect(() => {
@@ -114,7 +117,15 @@ export default function Verify() {
 
       let statusCode, cert;
       try {
-        [statusCode, cert] = await registry.verifyCertificate(id.trim(), digest);
+        if (payload.batchRoot && Array.isArray(payload.proof)) {
+          const { BatchRegistry: batch } = await getReadOnlyContracts();
+          statusCode = await batch.verifyInBatch(
+            payload.batchRoot, payload.proof, id.trim(), digest
+          );
+          cert = { cid: cid.trim(), dataHash: digest, issuer: "", issuedAt: 0, revokedAt: 0 };
+        } else {
+          [statusCode, cert] = await registry.verifyCertificate(id.trim(), digest);
+        }
       } catch (e) {
         // A bare "Failed to fetch" here is a dead RPC, not a bad certificate.
         // Say which step broke, so it is never mistaken for a verdict.
@@ -146,6 +157,14 @@ export default function Verify() {
     }
   }, []);
 
+  async function logVerification() {
+    try {
+      const { contracts } = await getSignerContracts();
+      await (await contracts.AccessManager.recordVerification(form.id, result.digest)).wait();
+      setLogged(true);
+    } catch (e) { setError(e.message ?? String(e)); }
+  }
+
   async function reveal() {
     setRevealError("");
     try {
@@ -173,6 +192,11 @@ export default function Verify() {
           Scanning the QR code fills this in automatically. No wallet, account
           or sign-in is needed — the check is a free read of the public ledger.
         </p>
+        {result.status === "Valid" && (
+          <button className="secondary" onClick={logVerification} disabled={logged}>
+            {logged ? "Verification logged" : "Log this verification on-chain"}
+          </button>
+        )}
 
         <div style={{ marginBottom: 12 }}>
           <label>Certificate id</label>

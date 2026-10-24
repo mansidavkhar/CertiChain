@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import {
   getSignerContract,
   getReadOnlyContract,
+  getReadOnlyContracts,
+  getSignerContracts,
   connectWallet,
   hasWallet,
   txUrl,
@@ -29,6 +31,7 @@ export default function Admin() {
   const [busy, setBusy] = useState("");
 
   const [issuerAddr, setIssuerAddr] = useState("");
+  const [institutionName, setInstitutionName] = useState("");
   const [revokeId, setRevokeId] = useState("");
   const [revokeReason, setRevokeReason] = useState("");
 
@@ -45,9 +48,10 @@ export default function Admin() {
       const { address } = await connectWallet();
       setWallet(address);
       const registry = await getReadOnlyContract();
+      const { InstitutionRegistry: institutions } = await getReadOnlyContracts();
       const [owner, issuer] = await Promise.all([
-        registry.owner(),
-        registry.isIssuer(address),
+        institutions.owner(),
+        institutions.isApproved(address),
       ]);
       setRoles({
         owner,
@@ -77,6 +81,18 @@ export default function Admin() {
       setBanner({ kind: "error", text: readableError(e) });
     } finally {
       setBusy("");
+    }
+
+    async function sendInstitution(key, label, fn) {
+      setBusy(key);
+      setBanner(null);
+      try {
+        const { contracts } = await getSignerContracts();
+        const tx = await fn(contracts.InstitutionRegistry);
+        await tx.wait();
+        setBanner({ kind: "ok", text: `${label} confirmed.`, hash: tx.hash });
+      } catch (e) { setBanner({ kind: "error", text: readableError(e) }); }
+      finally { setBusy(""); }
     }
   }
 
@@ -146,7 +162,7 @@ export default function Admin() {
       <div className="card">
         <h2>Issuing authorities</h2>
         <p className="hint">
-          Only the contract owner can change this list. A whitelisted address
+          Only the contract owner can change this list. An approved institution
           can issue certificates and revoke the ones it issued — never another
           university's.
         </p>
@@ -157,11 +173,13 @@ export default function Admin() {
           placeholder="0x…"
           spellCheck={false}
         />
+        <label>Institution name</label>
+        <input value={institutionName} onChange={(e) => setInstitutionName(e.target.value)} placeholder="Example University" />
         <div className="row" style={{ marginTop: 12 }}>
           <button
             disabled={!roles.isOwner || !validAddr || busy}
             onClick={() =>
-              send("add", "Issuer added", (c) => c.addIssuer(issuerAddr.trim()))
+              sendInstitution("add", "Institution added", (c) => c.addInstitution(issuerAddr.trim(), institutionName.trim()))
             }
           >
             {busy === "add" ? <><span className="spin" /> …</> : "Add issuer"}
@@ -170,8 +188,8 @@ export default function Admin() {
             className="secondary"
             disabled={!roles.isOwner || !validAddr || busy}
             onClick={() =>
-              send("remove", "Issuer removed", (c) =>
-                c.removeIssuer(issuerAddr.trim())
+              sendInstitution("remove", "Institution removed", (c) =>
+                c.removeInstitution(issuerAddr.trim())
               )
             }
           >

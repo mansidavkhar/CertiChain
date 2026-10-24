@@ -1,13 +1,17 @@
 import { useState } from "react";
 import QRCode from "qrcode";
+import { ZeroAddress } from "ethers";
 import {
   getSignerContract,
   getReadOnlyContract,
+  getReadOnlyContracts,
+  getSignerContracts,
   txUrl,
   readableError,
 } from "../lib/chain";
 import { packageCertificate, SCHEMES } from "@lib/certificate.mjs";
 import { pinJSON, gatewayUrl } from "@lib/ipfs.mjs";
+import { pinBatch } from "@lib/batch.mjs";
 
 /**
  * Issuer page. Only a whitelisted university address can complete this.
@@ -26,6 +30,7 @@ const BLANK = {
   cgpa: "",
   issueDate: new Date().toISOString().slice(0, 10),
   institution: "",
+  student: "",
 };
 
 export default function Issue() {
@@ -35,8 +40,52 @@ export default function Issue() {
   const [stage, setStage] = useState("");
   const [error, setError] = useState("");
   const [issued, setIssued] = useState(null);
+  const [tab, setTab] = useState("single");
+  const [batchRows, setBatchRows] = useState([]);
+  const [batchResult, setBatchResult] = useState(null);
 
   const set = (k) => (e) => setFields({ ...fields, [k]: e.target.value });
+
+  function readCsv(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const lines = String(reader.result).trim().split(/\r?\n/);
+      const headers = lines.shift().split(",").map((h) => h.trim());
+      setBatchRows(lines.filter(Boolean).map((line) => {
+        const values = line.split(",");
+        return Object.fromEntries(headers.map((h, i) => [h, (values[i] ?? "").trim()]));
+      }));
+    };
+    reader.readAsText(file);
+  }
+
+  async function submitBatch(e) {
+    e.preventDefault();
+    setBusy(true); setError(""); setStage("Encrypting batch…");
+    try {
+      const jwt = import.meta.env.VITE_PINATA_JWT;
+      if (!jwt) throw new Error("No Pinata JWT configured.");
+      const prepared = await pinBatch(batchRows, scheme, jwt);
+      setStage("Anchoring one Merkle root…");
+      const { contracts } = await getSignerContracts();
+      const tx = await contracts.BatchRegistry.anchorBatch(prepared.root, prepared.items.length, "CertChain batch");
+      const receipt = await tx.wait();
+      setBatchResult({ ...prepared, txHash: tx.hash, gasUsed: receipt.gasUsed.toString() });
+    } catch (e) { setError(readableError(e)); }
+    finally { setBusy(false); setStage(""); }
+  }
+
+  function downloadBatch() {
+    const csv = ["certId,cid,dataHash,root,proof"].concat(
+      (batchResult?.items ?? []).map((item) =>
+        [item.certId, item.cid, item.dataHash, batchResult.root, JSON.stringify(item.proof).replaceAll(",", ";")].join(",")
+      )
+    ).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const link = document.createElement("a");
+    link.href = url; link.download = "certchain-batch-verification.csv"; link.click();
+    URL.revokeObjectURL(url);
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -68,7 +117,8 @@ export default function Issue() {
        */
       const reader = await getReadOnlyContract();
 
-      if (!(await reader.isIssuer(address))) {
+      const { InstitutionRegistry: institutions } = await getReadOnlyContracts();
+      if (!(await institutions.isApproved(address))) {
         throw new Error(
           `${address} is not whitelisted as an issuer. Add it from the Admin ` +
             `page using the contract owner's wallet.`
@@ -94,7 +144,7 @@ export default function Issue() {
       );
 
       setStage("Waiting for you to confirm in MetaMask…");
-      const tx = await contract.issueCertificate(pkg.certId, cid, pkg.dataHash);
+      const tx = await contract.issueCertificate(pkg.certId, cid, pkg.dataHash, fields.student || ZeroAddress);
 
       setStage("Waiting for the transaction to be mined…");
       const receipt = await tx.wait();
@@ -189,7 +239,20 @@ export default function Issue() {
   }
 
   return (
-    <form className="card" onSubmit={submit}>
+    <>
+    <div className="row">
+      <button type="button" className={tab === "single" ? "" : "secondary"} onClick={() => setTab("single")}>Single</button>
+      <button type="button" className={tab === "batch" ? "" : "secondary"} onClick={() => setTab("batch")}>Batch</button>
+    </div>
+    {tab === "batch" ? <form className="card" onSubmit={submitBatch}>
+      <h2>Issue a CSV batch</h2>
+      <p className="hint">CSV headers: studentId, studentName, course, grade, issueDate, optional wallet.</p>
+      <input type="file" accept=".csv,text/csv" required onChange={(e) => readCsv(e.target.files[0])} />
+      {batchRows.length > 0 && <p>{batchRows.length} rows previewed. The chain receives one anchor transaction.</p>}
+      {error && <div className="banner error">{error}</div>}
+      <button type="submit" disabled={busy || batchRows.length === 0}>{busy ? "Working…" : "Encrypt, pin and anchor batch"}</button>
+      {batchResult && <div className="banner ok">Batch anchored at {batchResult.root} ({batchResult.gasUsed} gas). <button type="button" onClick={downloadBatch}>Download verification CSV</button></div>}
+    </form> : <form className="card" onSubmit={submit}>
       <h2>Issue a certificate</h2>
       <p className="hint">
         The details are encrypted in your browser before they go anywhere. Only
@@ -227,6 +290,10 @@ export default function Issue() {
           <label>Institution</label>
           <input value={fields.institution} onChange={set("institution")} />
         </div>
+        <div>
+          <label>Student wallet address (optional)</label>
+          <input value={fields.student} onChange={set("student")} placeholder="0x…"/>
+        </div>
       </div>
 
       <div style={{ margin: "14px 0" }}>
@@ -253,6 +320,7 @@ export default function Issue() {
         </button>
         {stage && <span className="muted small">{stage}</span>}
       </div>
-    </form>
+    </form>}
+    </>
   );
 }

@@ -192,3 +192,47 @@ because gas depends on the bytecode rather than the network.
 ## Licence
 
 MIT. The paper it implements is CC BY; it is cited above as required.
+# CertChain
+
+## Five-contract architecture
+
+CertChain uses `InstitutionRegistry`, `CertificateSBT`, `CertRegistry`,
+`AccessManager`, and `BatchRegistry`. The deployment order is exactly:
+institution registry, SBT, core registry, one-time SBT minter assignment,
+access manager, then batch registry. See [docs/CONTRACTS.md](docs/CONTRACTS.md)
+for the public API and caller rules.
+
+Single certificates retain the original id formula
+`keccak256(abi.encode(studentId, course, issueDate))`, four verification states,
+free verification, and the safe order **encrypt -> pin to IPFS -> chain write
+last**. Batch certificates use an OpenZeppelin StandardMerkleTree and do not
+receive SBTs.
+
+## Windows quick start
+
+In PowerShell:
+
+```powershell
+npm install
+npm run test:all
+Copy-Item .env.example .env
+Copy-Item frontend\.env.example frontend\.env.local
+npm run deploy:amoy
+cd frontend
+npm install
+npm run dev
+```
+
+Never print or commit either environment file. Polygon Amoy is the only real
+network used by this project. Unit tests use Hardhat's in-memory network; no
+Ganache or local node is required.
+
+To deploy, configure `AMOY_RPC_URL` and a funded Amoy `PRIVATE_KEY`, then run
+`npm run deploy:amoy`. The script writes all five addresses and ABIs to
+`deployments\amoy.json` and `frontend\src\contract.json`. Run
+`npm run doctor` to check the configured network and deployment.
+
+For a student-wallet demonstration, use MetaMask Account details to create or
+import a second account, copy its public address into the Issue page's
+**Student wallet address**, and switch MetaMask to that account to open **My
+certificates**. Never share the second account's private key.
