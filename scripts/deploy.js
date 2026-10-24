@@ -1,82 +1,70 @@
-/**
- * Deploy CertRegistry.
- *
- *   npx hardhat run scripts/deploy.js                 # throwaway in-process chain
- *   npx hardhat run scripts/deploy.js --network localhost
- *   npx hardhat run scripts/deploy.js --network sepolia
- *   npx hardhat run scripts/deploy.js --network amoy
- *
- * The deployed address is written to deployments/<network>.json and copied
- * into frontend/src/contract.json, so the dApp never has a hardcoded address.
- */
-
 const fs = require("fs");
 const path = require("path");
 const { ethers, network, artifacts } = require("hardhat");
 
+const TRANSIENT = /Invalid JSON-RPC|Unknown block|coalesce|timeout|ETIMEDOUT|ECONNRESET|429|502|503|rate limit/i;
+async function withRetry(label, fn, attempts = 5) {
+  for (let i = 1; ; i++) {
+    try { return await fn(); } catch (e) {
+      if (i >= attempts || !TRANSIENT.test(e.message ?? String(e))) throw e;
+      const delay = 1500 * i;
+      console.log(`${label}: retry ${i}/${attempts - 1} in ${delay} ms`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+const waitFor = (tx, label) => withRetry(label, () => tx.wait());
+
+async function deploy(name, args = []) {
+  const contract = await ethers.deployContract(name, args);
+  await withRetry(`${name} deployment`, () => contract.waitForDeployment());
+  const receipt = await waitFor(contract.deploymentTransaction(), `${name} receipt`);
+  return { contract, receipt };
+}
+
 async function main() {
   const [deployer] = await ethers.getSigners();
   const balance = await ethers.provider.getBalance(deployer.address);
+  console.log(`network   ${network.name}\ndeployer  ${deployer.address}\nbalance   ${ethers.formatEther(balance)} ETH`);
+  if (balance === 0n && network.name !== "hardhat") throw new Error("Deployer has no funds.");
 
-  console.log(`network   ${network.name}`);
-  console.log(`deployer  ${deployer.address}`);
-  console.log(`balance   ${ethers.formatEther(balance)} ETH`);
+  const inst = await deploy("InstitutionRegistry");
+  const sbt = await deploy("CertificateSBT");
+  const registry = await deploy("CertRegistry", [inst.contract.target, sbt.contract.target]);
+  const minterTx = await sbt.contract.setMinter(registry.contract.target);
+  await waitFor(minterTx, "setMinter receipt");
+  const access = await deploy("AccessManager", [registry.contract.target, sbt.contract.target]);
+  const batch = await deploy("BatchRegistry", [inst.contract.target]);
 
-  if (balance === 0n && network.name !== "hardhat") {
-    throw new Error(
-      "Deployer has no funds. Get testnet ETH from a faucet " +
-        "(sepoliafaucet.com for Sepolia, faucet.polygon.technology for Amoy)."
-    );
+  const names = [
+    ["InstitutionRegistry", inst],
+    ["CertificateSBT", sbt],
+    ["CertRegistry", registry],
+    ["AccessManager", access],
+    ["BatchRegistry", batch],
+  ];
+  const contracts = {};
+  for (const [name, result] of names) {
+    const { abi } = await artifacts.readArtifact(name);
+    contracts[name] = { address: result.contract.target, abi, deploymentBlock: result.receipt.blockNumber };
+    console.log(`${name.padEnd(22)} ${result.contract.target}  gas ${result.receipt.gasUsed}`);
   }
-
-  const registry = await ethers.deployContract("CertRegistry");
-  await registry.waitForDeployment();
-
-  const address = await registry.getAddress();
-  const tx = registry.deploymentTransaction();
-  const receipt = await tx.wait();
-
-  console.log(`\nCertRegistry deployed to ${address}`);
-  console.log(`gas used  ${receipt.gasUsed.toString()}`);
-
-  // Persist the address + ABI for the frontend and for later scripts.
-  const { abi } = await artifacts.readArtifact("CertRegistry");
   const record = {
     network: network.name,
     chainId: Number((await ethers.provider.getNetwork()).chainId),
-    address,
     deployer: deployer.address,
-    deploymentBlock: receipt.blockNumber,
     deployedAt: new Date().toISOString(),
-    abi,
+    addresses: Object.fromEntries(Object.entries(contracts).map(([name, value]) => [name, value.address])),
+    contracts,
+    // Kept for scripts written against the original single-contract record.
+    address: registry.contract.target,
+    abi: contracts.CertRegistry.abi,
   };
-
   const outDir = path.join(__dirname, "..", "deployments");
   fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(outDir, `${network.name}.json`),
-    JSON.stringify(record, null, 2)
-  );
-
-  const frontendDir = path.join(__dirname, "..", "frontend", "src");
-  if (fs.existsSync(frontendDir)) {
-    fs.writeFileSync(
-      path.join(frontendDir, "contract.json"),
-      JSON.stringify(record, null, 2)
-    );
-    console.log("address + ABI copied into frontend/src/contract.json");
-  }
-
-  console.log(`saved     deployments/${network.name}.json`);
-
-  if (network.name === "sepolia" || network.name === "amoy") {
-    console.log(
-      `\nVerify with:\n  npx hardhat verify --network ${network.name} ${address}`
-    );
-  }
+  fs.writeFileSync(path.join(outDir, `${network.name}.json`), JSON.stringify(record, null, 2));
+  fs.writeFileSync(path.join(__dirname, "..", "frontend", "src", "contract.json"), JSON.stringify(record, null, 2));
+  console.log(`saved deployments/${network.name}.json and frontend/src/contract.json`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+main().catch((err) => { console.error(err); process.exitCode = 1; });

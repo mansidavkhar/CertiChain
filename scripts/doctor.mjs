@@ -45,6 +45,20 @@ async function jsonRpc(url, method, params = []) {
 
 console.log("\nCertChain configuration check\n" + "─".repeat(60));
 
+/* ---------- deployed contract set --------------------------------- */
+console.log("\nDeployment");
+const deploymentFile = path.join("deployments", "amoy.json");
+if (!fs.existsSync(deploymentFile)) {
+  report(WARN, "deployments/amoy.json", "missing — run npm run deploy:amoy");
+} else {
+  const deployment = JSON.parse(fs.readFileSync(deploymentFile, "utf8"));
+  const required = ["InstitutionRegistry", "CertificateSBT", "CertRegistry", "AccessManager", "BatchRegistry"];
+  for (const name of required) {
+    const address = deployment.addresses?.[name] ?? deployment.contracts?.[name]?.address;
+    report(/^0x[0-9a-fA-F]{40}$/.test(address ?? "") ? PASS : FAIL, name, address || "missing address");
+  }
+}
+
 /* ---------- 1. .env ------------------------------------------------ */
 
 console.log("\nEnvironment files");

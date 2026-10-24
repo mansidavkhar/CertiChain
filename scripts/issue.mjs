@@ -83,13 +83,20 @@ async function main() {
   console.log(`issuer    ${signer.address}`);
   console.log(`scheme    ${SCHEME}\n`);
 
-  const registry = await ethers.getContractAt("CertRegistry", deployment.address);
+  const registry = await ethers.getContractAt(
+    "CertRegistry",
+    deployment.addresses?.CertRegistry ?? deployment.address
+  );
+  const institutions = await ethers.getContractAt(
+    "InstitutionRegistry",
+    deployment.addresses?.InstitutionRegistry
+  );
 
   // Fail early with a clear message rather than deep inside a revert.
-  if (!(await registry.isIssuer(signer.address))) {
+  if (!(await institutions.isApproved(signer.address))) {
     throw new Error(
       `${signer.address} is not a whitelisted issuer.\n` +
-        `The contract owner must call addIssuer() for this address first.`
+        `The contract owner must call addInstitution() for this address first.`
     );
   }
 
@@ -122,7 +129,9 @@ async function main() {
   /* ---- 4. anchor on chain ----------------------------------------- */
 
   console.log("submitting transaction...");
-  const tx = await registry.issueCertificate(pkg.certId, cid, pkg.dataHash);
+  const tx = await registry.issueCertificate(
+    pkg.certId, cid, pkg.dataHash, certificate.studentWallet ?? ethers.ZeroAddress
+  );
   console.log(`tx        ${tx.hash}`);
 
   const receipt = await tx.wait();
