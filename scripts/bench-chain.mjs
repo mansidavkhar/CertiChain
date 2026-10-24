@@ -135,38 +135,48 @@ async function main() {
   console.log("\nGas per operation");
   console.log("─".repeat(72));
 
-  const registry = await ethers.deployContract("CertRegistry");
-  await registry.waitForDeployment();
-  const deployGas = (await waitFor(registry.deploymentTransaction(), "deploy")).gasUsed;
-
-  const ops = [{ operation: "deploy (once)", gasUsed: deployGas }];
+  const deployed = [];
+  async function deployMeasured(name, args = []) {
+    const c = await ethers.deployContract(name, args);
+    await c.waitForDeployment();
+    const receipt = await waitFor(c.deploymentTransaction(), `deploy ${name}`);
+    deployed.push({ operation: `deploy ${name}`, gasUsed: receipt.gasUsed });
+    return c;
+  }
+  const institutions = await deployMeasured("InstitutionRegistry");
+  const sbt = await deployMeasured("CertificateSBT");
+  const registry = await deployMeasured("CertRegistry", [institutions.target, sbt.target]);
+  await waitFor(await sbt.setMinter(registry.target), "setMinter");
+  const access = await deployMeasured("AccessManager", [registry.target, sbt.target]);
+  const batch = await deployMeasured("BatchRegistry", [institutions.target]);
+  const ops = [...deployed];
 
   const c1 = await makeCert(1);
   const r1 = await withRetry("issue", async () =>
-    waitFor(await registry.issueCertificate(c1.certId, FAKE_CID, c1.dataHash))
+    waitFor(await registry.issueCertificate(c1.certId, FAKE_CID, c1.dataHash, issuer.address))
   );
   ops.push({ operation: "issueCertificate", gasUsed: r1.gasUsed });
 
-  const rAdd = await withRetry("addIssuer", async () =>
-    waitFor(await registry.addIssuer(scratch))
+  const rAdd = await withRetry("addInstitution", async () =>
+    waitFor(await institutions.addInstitution(scratch, "Benchmark"))
   );
-  ops.push({ operation: "addIssuer", gasUsed: rAdd.gasUsed });
+  ops.push({ operation: "addInstitution", gasUsed: rAdd.gasUsed });
 
   const rRev = await withRetry("revoke", async () =>
     waitFor(await registry.revokeCertificate(c1.certId, "benchmark"))
   );
   ops.push({ operation: "revokeCertificate", gasUsed: rRev.gasUsed });
 
-  const rRem = await withRetry("removeIssuer", async () =>
-    waitFor(await registry.removeIssuer(scratch))
+  const rRem = await withRetry("removeInstitution", async () =>
+    waitFor(await institutions.removeInstitution(scratch))
   );
-  ops.push({ operation: "removeIssuer", gasUsed: rRem.gasUsed });
+  ops.push({ operation: "removeInstitution", gasUsed: rRem.gasUsed });
 
   // The view functions. estimateGas reports what they *would* cost inside a
   // transaction; called externally, as an employer does, they cost nothing.
   const c2 = await makeCert(2);
   await withRetry("issue2", async () =>
-    waitFor(await registry.issueCertificate(c2.certId, FAKE_CID, c2.dataHash))
+    waitFor(await registry.issueCertificate(c2.certId, FAKE_CID, c2.dataHash, issuer.address))
   );
   for (const [label, est] of [
     ["verifyCertificate (view)", await registry.verifyCertificate.estimateGas(c2.certId, c2.dataHash)],
@@ -249,7 +259,7 @@ async function main() {
     for (const c of certs) {
       const t0 = performance.now();
       try {
-        const tx = await registry.issueCertificate(c.certId, FAKE_CID, c.dataHash);
+        const tx = await registry.issueCertificate(c.certId, FAKE_CID, c.dataHash, issuer.address);
         await waitFor(tx, "latency sample");
         latencies.push(performance.now() - t0);
       } catch (e) {
