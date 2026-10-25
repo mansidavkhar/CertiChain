@@ -1,238 +1,251 @@
-# CertChain — blockchain + IPFS academic certificate verification
-
-A mini project implementing the framework of:
-
-> S. A. Sultana, C. Rupa, R. P. Malleswari and T. R. Gadekallu,
-> "IPFS-Blockchain Smart Contracts Based Conceptual Framework to Reduce
-> Certificate Frauds in the Academic Field", *Information*, vol. 14, no. 8,
-> art. 446, 2023. https://doi.org/10.3390/info14080446 (open access, CC BY)
-
-A university issues a degree certificate. The certificate itself is encrypted
-and stored on IPFS; only its content identifier and a `keccak256` digest of the
-ciphertext are written to Ethereum. Anyone can then check that a certificate is
-genuine, unmodified and not revoked, for free, without contacting the
-university and without being able to read the certificate.
-
-## How it works
-
-```
-Issuer (university)                                  Verifier (employer)
-─────────────────────                                ───────────────────
-certificate fields                                   scan QR → certId + key
-        │                                                    │
-   canonical JSON                                     read record on-chain
-        │                                             (CID, dataHash, revoked)
-   encrypt  ──► key ──► QR code ──► student ─────────────────┤
-        │                                                    │
-   ciphertext ──► IPFS ──► CID                        fetch CID from IPFS
-        │                                                    │
-   keccak256(ciphertext) = dataHash                   keccak256(fetched)
-        │                                                    │
-   issueCertificate(certId, CID, dataHash)            compare ──► Valid /
-        │                                                          Tampered /
-        ▼                                                          Revoked
-   CertRegistry on Ethereum                          decrypt with key (optional)
-```
-
-Three properties fall out of this:
-
-- **Integrity.** The digest is over the ciphertext bytes on IPFS. Change one
-  character of that file and verification returns `Tampered`.
-- **Confidentiality.** The chain holds no personal data. The decryption key
-  travels with the student, so they choose who can read the certificate.
-- **No gatekeeper.** `verifyCertificate` is a `view` function, so an employer
-  needs no wallet, no ETH and no account with the university.
-
-## What differs from the paper, and why
-
-| Paper | Here | Reason |
-|---|---|---|
-| Name/password checked against a local DB | On-chain issuer whitelist | A password check off-chain is not verifiable by anyone else. An address cannot be forged. |
-| Viewing requires an ETH balance above a threshold | Verification is a free `view` call | Charging for verification defeats the point of a public trust anchor. |
-| Local test chain / Ropsten | Hardhat, then Sepolia or Polygon Amoy | Ropsten and the other old testnets were shut down in 2022–23. |
-| Key handling unspecified | Key is issued to the student in the QR code | Makes the privacy claim concrete and student-controlled. |
-| "Lightweight homomorphic" cipher only | Same cipher **plus** AES-256-GCM, benchmarked against each other | See below. |
-
-### On the paper's cipher
-
-The paper's Algorithm 1 is reimplemented faithfully in `lib/paper-cipher.mjs`,
-with the paper's own notation in the comments. It is worth being straight about
-its weaknesses, because a reviewer will ask:
-
-- It is **not homomorphic encryption**. The division and modulus are applied by
-  the key holder at encryption time; no third party can compute on the
-  ciphertext. The name is a misnomer.
-- The keystream is a **publicly known sequence** (tetrahedral and pentatope
-  numbers), so the entire key reduces to two starting indices. `npm run test:lib`
-  contains a test that brute-forces the key in well under a second. The paper's
-  Proposition 3 counts guesses over key *values* rather than over the two
-  indices that generate them.
-- There is **no authentication tag**, so blocks can be cut, spliced or
-  reordered undetected. In this system the on-chain digest is what actually
-  catches tampering, not the cipher.
-- Ciphertext expands roughly 15–20×.
-
-`lib/aes-cipher.mjs` provides AES-256-GCM through the Web Crypto API as the
-alternative. Both schemes work end to end; comparing them on speed, size and
-security properties is the project's contribution over the paper.
-
-## Layout
-
-```
-contracts/CertRegistry.sol      the smart contract (issue, verify, revoke, view)
-test/CertRegistry.test.js       24 contract tests
-lib/paper-cipher.mjs            the paper's Algorithms 1 and 4
-lib/aes-cipher.mjs              AES-256-GCM alternative
-lib/certificate.mjs             canonical JSON, certId, digest, packaging
-lib/ipfs.mjs                    Pinata pinning + multi-gateway fetch
-test-lib/crypto.test.mjs        23 crypto and packaging tests
-scripts/deploy.js               deploy + write deployments/<network>.json
-scripts/demo.mjs                full end-to-end walkthrough (the viva demo)
-scripts/issue.mjs               issue for real: encrypt, pin, anchor, make a QR
-scripts/setup-solc-offline.js   makes compiling work behind a firewall
-scripts/doctor.mjs              one-shot config check (env, RPC, Pinata, deploy)
-scripts/bench-cipher.mjs        cipher comparison: speed, size, brute-force
-scripts/bench-chain.mjs         gas, cost, latency, throughput
-scripts/make-charts.mjs         CSVs -> SVG charts + results/report.html
-frontend/                       React dApp (Verify, Issue, Admin)
-```
-
-## Getting started
-
-```bash
-npm install
-npm run test:all      # 47 tests: contract + crypto
-npx hardhat run scripts/demo.mjs
-```
-
-`npm install` also runs `scripts/setup-solc-offline.js`, which installs the
-Solidity compiler from the npm `solc` package into Hardhat's cache. Hardhat
-normally downloads it from `binaries.soliditylang.org`; if your network blocks
-that host you get `HH502: Couldn't download compiler version list`, and this
-script is the fix. On an unrestricted network it is harmless.
-
-### Deploying to a testnet
-
-```bash
-cp .env.example .env     # fill in RPC URL and a throwaway private key
-npm run deploy:sepolia   # or: npm run deploy:amoy
-```
-
-Get test funds from a Sepolia faucet or from `faucet.polygon.technology` for
-Amoy. **Never put a private key with real funds in `.env`.**
-
-### Measuring gas
-
-```bash
-npm run gas
-```
-
-## Running it for real on Polygon Amoy
-
-```bash
-# 1. configure
-cp .env.example .env            # PRIVATE_KEY, PINATA_JWT
-cp frontend/.env.example frontend/.env.local   # VITE_PINATA_JWT
-
-# 2. deploy — writes frontend/src/contract.json automatically
-npm run deploy:amoy
-
-# 3. issue one from the command line (prints a QR code in the terminal)
-npx hardhat run scripts/issue.mjs --network amoy
-
-# 4. or run the dApp
-cd frontend && npm install && npm run dev
-```
-
-The dApp has three pages:
-
-- **Verify** — needs no wallet at all. Scanning the QR code opens it with
-  everything prefilled and the check runs on load. Integrity is confirmed
-  before, and independently of, decryption.
-- **Issue** — connects MetaMask, encrypts in the browser, pins to IPFS,
-  anchors on chain, and produces the student's QR code.
-- **Admin** — manage issuer addresses (owner only) and revoke (issuer only).
-
-### About the Pinata key in the frontend
-
-Anything named `VITE_*` is compiled into the JavaScript the browser downloads,
-so `VITE_PINATA_JWT` is **not secret** once the app is deployed. That is
-acceptable for a mini project. In a production system the upload would go
-through a small backend holding the key server-side. Use a Pinata key scoped
-to `pinJSONToIPFS` only, and revoke it when the project is marked.
-
-## Evaluation
-
-```bash
-npm run bench:cipher          # paper's cipher vs AES-256-GCM
-npm run bench:chain           # gas + latency, local chain
-npm run bench:chain:amoy      # same, on the real testnet (costs test POL)
-npm run charts                # -> results/charts/*.svg + results/report.html
-```
-
-`npm run evaluate` runs the lot. Open `results/report.html` for everything on
-one page; the individual SVGs in `results/charts/` paste into Word and stay
-sharp at any size.
-
-One caveat to carry into the write-up: on a local Hardhat node every
-transaction mines instantly, so local latency and throughput measure the node
-software, not blockchain consensus. The paper has the same problem — it reports
-sub-millisecond latencies, which no real network achieves. Use the Amoy run for
-the latency and throughput figures; gas figures are identical either way,
-because gas depends on the bytecode rather than the network.
-
-## Status
-
-- [x] Week 1 — contract, tests, deploy script
-- [x] Week 2a — both ciphers, packaging layer, tests, end-to-end demo
-- [x] Week 2b — real IPFS (Pinata), React dApp, QR codes
-- [x] Week 3a — benchmarks and charts
-- [ ] Week 3b — run benchmarks on Amoy, write the report
-
-## Licence
-
-MIT. The paper it implements is CC BY; it is cited above as required.
 # CertChain
 
-## Five-contract architecture
+CertChain is a blockchain academic-certificate verifier. Certificate details
+are encrypted in the browser, pinned to IPFS, and anchored on Polygon Amoy
+with a ciphertext digest. A verifier can check authenticity for free without a
+wallet; the decryption key remains off-chain.
 
-CertChain uses `InstitutionRegistry`, `CertificateSBT`, `CertRegistry`,
-`AccessManager`, and `BatchRegistry`. The deployment order is exactly:
-institution registry, SBT, core registry, one-time SBT minter assignment,
-access manager, then batch registry. See [docs/CONTRACTS.md](docs/CONTRACTS.md)
-for the public API and caller rules.
+## Architecture
 
-Single certificates retain the original id formula
-`keccak256(abi.encode(studentId, course, issueDate))`, four verification states,
-free verification, and the safe order **encrypt -> pin to IPFS -> chain write
-last**. Batch certificates use an OpenZeppelin StandardMerkleTree and do not
-receive SBTs.
+The project uses five contracts:
+
+| Contract | Responsibility |
+|---|---|
+| `InstitutionRegistry` | Owner-managed approved institutions and display names |
+| `CertificateSBT` | Soulbound ERC-721 tokens for single certificates |
+| `CertRegistry` | Single-certificate issue, verify, revoke, and certificate records |
+| `AccessManager` | Advisory access grants and on-chain verification audit events |
+| `BatchRegistry` | Merkle-root anchoring and verification for certificate batches |
+
+Deployment order:
+
+```text
+InstitutionRegistry
+CertificateSBT
+CertRegistry(institutionRegistry, sbt)
+sbt.setMinter(certRegistry)
+AccessManager(certRegistry, sbt)
+BatchRegistry(institutionRegistry)
+```
+
+See [docs/CONTRACTS.md](docs/CONTRACTS.md) for functions and caller rules.
+
+### Single certificates
+
+The certificate ID remains:
+
+```text
+keccak256(abi.encode(studentId, course, issueDate))
+```
+
+The lifecycle is always:
+
+```text
+encrypt -> pin to IPFS -> write to the chain last
+```
+
+Only the CID, ciphertext digest, issuer, timestamps, and revocation state are
+stored on-chain. The four verification states are:
+
+```text
+NotFound | Valid | Tampered | Revoked
+```
+
+Issuing a single certificate can mint a soulbound token to a student wallet.
+Transfers between non-zero addresses are rejected. Revoking the certificate
+burns its SBT while preserving the certificate record for verification history.
+
+### Batch certificates
+
+`lib/batch.mjs` encrypts all inputs, computes each `certId` and `dataHash`, and
+builds an OpenZeppelin StandardMerkleTree. Each pinned payload contains:
+
+```json
+{
+  "ciphertext": "...",
+  "batchRoot": "0x...",
+  "proof": ["0x..."]
+}
+```
+
+The root is anchored only after every payload is pinned. Proof metadata is
+outside the ciphertext, so `dataHash` remains computable before pinning.
+`BatchRegistry.verifyInBatch` recomputes the standard leaf:
+
+```text
+keccak256(bytes.concat(keccak256(abi.encode(certId, dataHash))))
+```
+
+Batch certificates do not receive SBTs. This saves one mint per certificate but
+means they do not appear on the My certificates page.
+
+## Repository layout
+
+```text
+contracts/
+  InstitutionRegistry.sol
+  CertificateSBT.sol
+  CertRegistry.sol
+  AccessManager.sol
+  BatchRegistry.sol
+lib/
+  aes-cipher.mjs       AES-256-GCM encryption
+  paper-cipher.mjs     cipher from the referenced paper
+  certificate.mjs      canonical JSON, IDs, hashes, packaging
+  batch.mjs            Merkle batch preparation and IPFS pinning
+  ipfs.mjs              Pinata pinning and racing gateway fetches
+scripts/
+  deploy.js             deploy all five contracts and write ABIs
+  issue.mjs             command-line single-certificate issuing
+  doctor.mjs            configuration and deployment diagnostics
+  bench-chain.mjs       Amoy gas, latency, and throughput benchmark
+  bench-cipher.mjs      cipher comparison benchmark
+  make-charts.mjs       CSV results to SVG charts
+frontend/
+  src/pages/Verify.jsx
+  src/pages/Issue.jsx
+  src/pages/Admin.jsx
+  src/pages/MyCertificates.jsx
+test/                    Hardhat contract tests
+test-lib/                encryption, packaging, and batch-library tests
+deployments/amoy.json    deployed Amoy addresses and ABIs
+```
 
 ## Windows quick start
 
-In PowerShell:
+Run these commands from PowerShell:
 
 ```powershell
 npm install
 npm run test:all
 Copy-Item .env.example .env
 Copy-Item frontend\.env.example frontend\.env.local
+```
+
+Configure `AMOY_RPC_URL`, a funded Amoy `PRIVATE_KEY`, and `PINATA_JWT` in
+`.env`. Configure `VITE_PINATA_JWT` and, optionally, `VITE_RPC_URL` and
+`VITE_PINATA_GATEWAY` in `frontend\.env.local`.
+
+Never print or commit either environment file. The only real network supported
+by this project is Polygon Amoy. Unit tests use Hardhat's built-in in-memory
+network; Ganache and a local node are not required.
+
+## Deploying to Polygon Amoy
+
+```powershell
 npm run deploy:amoy
+npm run doctor
+```
+
+The deployment script writes all five addresses and ABIs to:
+
+```text
+deployments\amoy.json
+frontend\src\contract.json
+```
+
+The deployer must have Amoy POL. Get test funds from the
+[Polygon faucet](https://faucet.polygon.technology/).
+
+## Running the frontend
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Never print or commit either environment file. Polygon Amoy is the only real
-network used by this project. Unit tests use Hardhat's in-memory network; no
-Ganache or local node is required.
+The dApp is Amoy-only and displays a warning if MetaMask is connected to
+another network.
 
-To deploy, configure `AMOY_RPC_URL` and a funded Amoy `PRIVATE_KEY`, then run
-`npm run deploy:amoy`. The script writes all five addresses and ABIs to
-`deployments\amoy.json` and `frontend\src\contract.json`. Run
-`npm run doctor` to check the configured network and deployment.
+### Admin
 
-For a student-wallet demonstration, use MetaMask Account details to create or
-import a second account, copy its public address into the Issue page's
-**Student wallet address**, and switch MetaMask to that account to open **My
-certificates**. Never share the second account's private key.
+The deployment owner can add or remove institutions and see institution names.
+An approved institution can issue and revoke its own single certificates.
+
+### Issue
+
+The Single tab encrypts, pins, and issues one certificate. The optional Student
+wallet address receives the soulbound certificate token.
+
+The Batch tab accepts a CSV with:
+
+```text
+studentId,studentName,course,grade,issueDate,wallet
+```
+
+It previews rows, encrypts and pins every payload, submits one
+`anchorBatch` transaction, and downloads a verification CSV.
+
+### My certificates
+
+The connected student wallet lists SBTs with
+`tokenOfOwnerByIndex`, rather than log queries. Each token has a Verify link,
+an access-grant form, and a revoke-access button.
+
+For a demonstration, create or import a second MetaMask account, issue to its
+public address, then switch MetaMask to that account and open My certificates.
+Never share the account's private key.
+
+### Verify
+
+Verification works without a wallet. Single links carry the certificate ID and
+CID. Batch links use the root and proof embedded in the fetched IPFS payload.
+The page reports RPC or gateway failures as errors, never as certificate
+verdicts. A successful verification can optionally be recorded with
+`AccessManager.recordVerification`.
+
+## Tests
+
+```powershell
+npm run test:all
+```
+
+The current suite contains **24 passing tests**:
+
+- 8 Hardhat contract tests covering all five contracts and an end-to-end flow
+- 16 library subtests covering both ciphers, packaging, and Merkle proofs
+
+## Benchmarks and results
+
+Amoy benchmarks use real testnet transactions and require a funded deployer:
+
+```powershell
+npm run bench:chain:amoy
+```
+
+The benchmark measures deployment gas for all five contracts, institution
+management, single issue including SBT mint, revoke including burn, access
+operations, verification logging, batch anchoring, and batch revocation. It
+also writes Amoy gas, cost, and performance CSVs under `results\`.
+
+Run the cipher benchmark and chart generation with:
+
+```powershell
+npm run bench:cipher
+npm run charts
+```
+
+Local Hardhat runs are useful for deterministic unit-test gas checks only.
+Their latency and throughput do not represent blockchain consensus. Use the
+Amoy output for network performance claims.
+
+## Cryptography note
+
+The paper's cipher is retained for comparison, but it is not authenticated and
+has a small brute-force key space. AES-256-GCM is the recommended scheme.
+Regardless of scheme, the on-chain digest protects the integrity of the exact
+ciphertext pinned to IPFS.
+
+## Differences from the referenced paper
+
+- On-chain institution approval replaces a local username/password database.
+- Verification is a free public `view` call.
+- AES-256-GCM is available alongside the paper's cipher.
+- IPFS stores encrypted payloads and the chain stores only public integrity
+  metadata.
+- Merkle batches reduce chain writes but intentionally do not mint SBTs.
+
+## Licence
+
+MIT. The referenced paper is open access under CC BY and is cited above.
