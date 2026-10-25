@@ -392,6 +392,32 @@ function buildCharts(c) {
     });
   }
 
+  const batch = readCsv(`chain-batch-${suffix}.csv`);
+  if (batch) {
+    out["chain-batch"] = lines(c, {
+      title: "Gas per certificate: single vs batch",
+      subtitle:
+        suffix === "amoy"
+          ? "single issue includes SBT mint; batch is one Merkle-root anchor"
+          : "local gas comparison; batch payloads are built off-chain",
+      xLabel: "certificates",
+      yLabel: "gas per certificate",
+      xs: batch.map((r) => r.certificates),
+      series: [
+        {
+          label: "single issue",
+          color: c.s1,
+          values: batch.map((r) => r.singleGasPerCertificate),
+        },
+        {
+          label: "batch anchor",
+          color: c.s2,
+          values: batch.map((r) => r.batchGasPerCertificateExact),
+        },
+      ],
+    });
+  }
+
   const perf = readCsv(`chain-performance-${suffix}.csv`);
   if (perf) {
     out["chain-latency"] = lines(c, {

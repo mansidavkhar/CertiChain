@@ -217,7 +217,10 @@ npm run bench:chain:amoy
 The benchmark measures deployment gas for all five contracts, institution
 management, single issue including SBT mint, revoke including burn, access
 operations, verification logging, batch anchoring, and batch revocation. It
-also writes Amoy gas, cost, and performance CSVs under `results\`.
+also builds fake off-chain Merkle trees for N = 10, 50, 100, and 500 and writes
+the gas-per-certificate comparison between repeated single issuing and one
+`anchorBatch` transaction for each N. Results are written as Amoy gas, cost,
+performance, and batch-comparison CSVs under `results\`.
 
 Run the cipher benchmark and chart generation with:
 
@@ -225,6 +228,9 @@ Run the cipher benchmark and chart generation with:
 npm run bench:cipher
 npm run charts
 ```
+
+The batch comparison is charted as
+`results\charts\chain-batch.svg` when `chain-batch-amoy.csv` is available.
 
 Local Hardhat runs are useful for deterministic unit-test gas checks only.
 Their latency and throughput do not represent blockchain consensus. Use the

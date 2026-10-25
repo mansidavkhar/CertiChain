@@ -24,6 +24,7 @@
 import fs from "fs";
 import path from "path";
 import hre from "hardhat";
+import { StandardMerkleTree } from "@openzeppelin/merkle-tree";
 import { packageCertificate, SCHEMES } from "../lib/certificate.mjs";
 
 const { ethers, network } = hre;
@@ -100,6 +101,14 @@ async function makeCert(n) {
 }
 
 const FAKE_CID = "bafkreievb2nwrex2lhhaoosmezv3j3dc7y2t7b24hx57ynwbjblqzxa66a";
+
+function makeBatchTree(size, seed) {
+  const values = Array.from({ length: size }, (_, index) => [
+    ethers.keccak256(ethers.toUtf8Bytes(`batch-${seed}-cert-${index}`)),
+    ethers.keccak256(ethers.toUtf8Bytes(`batch-${seed}-data-${index}`)),
+  ]);
+  return StandardMerkleTree.of(values, ["bytes32", "bytes32"]);
+}
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
@@ -191,6 +200,46 @@ async function main() {
   ]) {
     ops.push({ operation: label, gasUsed: est, note: "free when called off-chain" });
   }
+
+  /*
+   * Batch measurements use fake ciphertext digests and no IPFS. Building the
+   * tree is intentionally off-chain; only one root anchor is sent on-chain
+   * for each N. This isolates the chain cost of batch registration.
+   */
+  const batchSizes = [10, 50, 100, 500];
+  const batchRows = [];
+  let firstBatch = null;
+  for (const size of batchSizes) {
+    const tree = makeBatchTree(size, size);
+    const anchorReceipt = await withRetry(`anchorBatch N=${size}`, async () =>
+      waitFor(await batch.anchorBatch(tree.root, size, `benchmark-${size}`))
+    );
+    if (!firstBatch) firstBatch = { tree, size };
+    const anchorGas = BigInt(anchorReceipt.gasUsed);
+    const singleGasPerCertificate = BigInt(r1.gasUsed);
+    batchRows.push({
+      certificates: size,
+      singleGasPerCertificate: Number(singleGasPerCertificate),
+      singleTotalGas: Number(singleGasPerCertificate * BigInt(size)),
+      batchAnchorGas: Number(anchorGas),
+      batchGasPerCertificate: Number(anchorGas / BigInt(size)),
+      batchGasPerCertificateExact: Number(anchorGas) / size,
+      savingsPercent: +(
+        (1 - Number(anchorGas) / Number(singleGasPerCertificate * BigInt(size))) * 100
+      ).toFixed(2),
+      currency: symbol,
+    });
+    ops.push({ operation: `anchorBatch (${size})`, gasUsed: anchorGas });
+  }
+
+  const batchRevokeReceipt = await withRetry("revokeInBatch", async () =>
+    waitFor(await batch.revokeInBatch(
+      firstBatch.tree.root,
+      firstBatch.tree.at(0)[0],
+      "benchmark"
+    ))
+  );
+  ops.push({ operation: "revokeInBatch", gasUsed: batchRevokeReceipt.gasUsed });
 
   const opRows = ops.map((o) => ({
     operation: o.operation,
@@ -314,6 +363,7 @@ async function main() {
   csv(`chain-gas-${suffix}.csv`, opRows);
   csv(`chain-cost-${suffix}.csv`, costRows);
   csv(`chain-performance-${suffix}.csv`, perfRows);
+  csv(`chain-batch-${suffix}.csv`, batchRows);
 
   fs.writeFileSync(
     path.join(OUT, `chain-summary-${suffix}.json`),
@@ -329,6 +379,7 @@ async function main() {
         operations: opRows,
         cumulativeCost: costRows,
         performance: perfRows,
+        batchComparison: batchRows,
       },
       null,
       2
