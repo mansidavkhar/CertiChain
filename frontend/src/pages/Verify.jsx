@@ -192,7 +192,7 @@ export default function Verify() {
           Scanning the QR code fills this in automatically. No wallet, account
           or sign-in is needed — the check is a free read of the public ledger.
         </p>
-        {result.status === "Valid" && (
+        {result?.status === "Valid" && (
           <button className="secondary" onClick={logVerification} disabled={logged}>
             {logged ? "Verification logged" : "Log this verification on-chain"}
           </button>

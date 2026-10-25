@@ -151,6 +151,13 @@ async function main() {
   const batch = await deployMeasured("BatchRegistry", [institutions.target]);
   const ops = [...deployed];
 
+  // Fresh benchmark deployments start with no approved institutions.
+  // Approve the signer before measuring certificate operations.
+  const rApprove = await withRetry("approve benchmark issuer", async () =>
+    waitFor(await institutions.addInstitution(issuer.address, "Benchmark issuer"))
+  );
+  ops.push({ operation: "addInstitution (issuer setup)", gasUsed: rApprove.gasUsed });
+
   const c1 = await makeCert(1);
   const r1 = await withRetry("issue", async () =>
     waitFor(await registry.issueCertificate(c1.certId, FAKE_CID, c1.dataHash, issuer.address))
