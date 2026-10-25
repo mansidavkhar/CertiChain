@@ -194,6 +194,27 @@ async function main() {
   await withRetry("issue2", async () =>
     waitFor(await registry.issueCertificate(c2.certId, FAKE_CID, c2.dataHash, issuer.address))
   );
+  /*
+   * AccessManager operations need an SBT owner. c2 is deliberately issued to
+   * the benchmark signer, so these are real state-changing measurements rather
+   * than estimates that bypass the ownership check.
+   */
+  const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+  const rGrant = await withRetry("grantAccess", async () =>
+    waitFor(await access.grantAccess(c2.certId, scratch, expiresAt))
+  );
+  ops.push({ operation: "grantAccess", gasUsed: rGrant.gasUsed });
+
+  const rAccessRevoke = await withRetry("revokeAccess", async () =>
+    waitFor(await access.revokeAccess(c2.certId, scratch))
+  );
+  ops.push({ operation: "revokeAccess", gasUsed: rAccessRevoke.gasUsed });
+
+  const rRecord = await withRetry("recordVerification", async () =>
+    waitFor(await access.recordVerification(c2.certId, c2.dataHash))
+  );
+  ops.push({ operation: "recordVerification", gasUsed: rRecord.gasUsed });
+
   for (const [label, est] of [
     ["verifyCertificate (view)", await registry.verifyCertificate.estimateGas(c2.certId, c2.dataHash)],
     ["getCertificate (view)", await registry.getCertificate.estimateGas(c2.certId)],
